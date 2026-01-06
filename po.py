@@ -11,7 +11,7 @@ import pandas as pd
 # --- CONFIGURAÇÕES DO EXPERIMENTO ---
 NUM_INSTANCES = 10        # Quantos cenários diferentes
 NUM_RUNS_GA = 20          # Quantas vezes rodar o GA por cenário
-OUTPUT_DIR = "benchmark_data"
+OUTPUT_DIR = "PO/benchmark_data"
 
 # --- PARÂMETROS DO PROBLEMA ---
 POPULATION_SIZE = 60

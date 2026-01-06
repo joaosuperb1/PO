@@ -1,0 +1,24 @@
+========================================
+TABELA RESUMO DAS MÉDIAS
+========================================
+    Instance          Algorithm       Cost      Time  Feasible  Violations
+0          0  Genetic Algorithm  252678.35  1.472955       0.0         2.0
+1          0         Sequencial  152624.00  0.019978       0.0         NaN
+2          1  Genetic Algorithm    2052.55  1.499849       1.0         0.0
+3          1         Sequencial    2381.00  0.016474       1.0         0.0
+4          2  Genetic Algorithm    1969.25  1.581224       1.0         0.0
+5          2         Sequencial    2799.00  0.016422       1.0         0.0
+6          3  Genetic Algorithm    1816.50  1.521172       1.0         0.0
+7          3         Sequencial    2299.00  0.013891       1.0         0.0
+8          4  Genetic Algorithm    1852.40  1.564023       1.0         0.0
+9          4         Sequencial    2434.00  0.013175       1.0         0.0
+10         5  Genetic Algorithm    1991.95  1.583337       1.0         0.0
+11         5         Sequencial    2623.00  0.016510       1.0         0.0
+12         6  Genetic Algorithm    2319.65  1.503634       1.0         0.0
+13         6         Sequencial    2992.00  0.017225       1.0         0.0
+14         7  Genetic Algorithm    2383.55  1.587397       1.0         0.0
+15         7         Sequencial  251551.00  0.013463       0.0         NaN
+16         8  Genetic Algorithm    1520.40  1.503821       1.0         0.0
+17         8         Sequencial    2237.00  0.012262       1.0         0.0
+18         9  Genetic Algorithm    1920.20  1.526776       1.0         0.0
+19         9         Sequencial    2880.00  0.015114       1.0         0.0
