@@ -2,191 +2,361 @@ import networkx as nx
 import random
 import time
 import matplotlib.pyplot as plt
+import pickle
+import os
+import numpy as np
 from itertools import islice
+import pandas as pd
 
+# --- CONFIGURAÇÕES DO EXPERIMENTO ---
+NUM_INSTANCES = 10        # Quantos cenários diferentes
+NUM_RUNS_GA = 20          # Quantas vezes rodar o GA por cenário
+OUTPUT_DIR = "benchmark_data"
 
-# CONFIGURAÇÕES E PARÂMETROS (Meta-heurística)
-POPULATION_SIZE = 50      # Tamanho da população
-GENERATIONS = 100         # Número de iterações
-MUTATION_RATE = 0.1       # Chance de mutação de um gene
-K_PATHS = 5               # Pré-calcula K caminhos possíveis para cada demanda
-PENALTY_FACTOR = 10000    # Penalidade por estourar capacidade da aresta
+# --- PARÂMETROS DO PROBLEMA ---
+POPULATION_SIZE = 60
+GENERATIONS = 150
+MUTATION_RATE = 0.15
+K_PATHS = 8
+PENALTY_FACTOR = 50000
 
+# ==============================================================================
+# 1. GERAÇÃO DE INSTÂNCIAS E PERSISTÊNCIA
+# ==============================================================================
 
-# 1. GERAÇÃO DE INSTÂNCIA E UTILITÁRIOS
-def create_random_instance(num_nodes=10, num_edges=25, num_commodities=3):
-    """Cria um grafo direcionado aleatório e uma lista de demandas."""
+def create_complex_instance(num_nodes=50, num_edges=150, num_commodities=15):
+    """Cria uma rede densa e congestionada."""
     G = nx.gnm_random_graph(num_nodes, num_edges, directed=True)
-    
-    # Adiciona capacidades e custos às arestas
     for u, v in G.edges():
-        G[u][v]['capacity'] = random.randint(5, 15) # Capacidade da aresta
-        G[u][v]['cost'] = random.randint(1, 10)     # Custo por unidade de fluxo
-        
-    # Gera demandas (commodities): (origem, destino, quantidade_demanda)
+        # Capacidades baixas para gerar gargalos (8 a 15 unidades)
+        G[u][v]['capacity'] = random.randint(8, 15) 
+        G[u][v]['cost'] = random.randint(1, 20)
+    
     commodities = []
-    for _ in range(num_commodities):
-        s = random.randint(0, num_nodes-1)
-        t = random.randint(0, num_nodes-1)
-        while s == t or not nx.has_path(G, s, t): # Garante que existe caminho
-            s = random.randint(0, num_nodes-1)
-            t = random.randint(0, num_nodes-1)
-        demand = random.randint(1, 5)
-        commodities.append((s, t, demand))
-        
+    while len(commodities) < num_commodities:
+        s, t = random.sample(range(num_nodes), 2)
+        if nx.has_path(G, s, t):
+            demand = random.randint(3, 5) # Demanda alta
+            commodities.append({'s': s, 't': t, 'd': demand})
     return G, commodities
 
-def k_shortest_paths(G, source, target, k, weight='cost'):
-    """Retorna os K caminhos mais curtos entre s e t."""
-    try:
-        return list(islice(nx.shortest_simple_paths(G, source, target, weight=weight), k))
-    except nx.NetworkXNoPath:
-        return []
+def generate_and_save_dataset():
+    if not os.path.exists(OUTPUT_DIR):
+        os.makedirs(OUTPUT_DIR)
+        print(f"Gerando {NUM_INSTANCES} novas instâncias em '{OUTPUT_DIR}'...")
+        for i in range(NUM_INSTANCES):
+            G, comms = create_complex_instance()
+            filename = os.path.join(OUTPUT_DIR, f"instancia_{i}.pkl")
+            with open(filename, "wb") as f:
+                pickle.dump((G, comms), f)
+        print("Dataset gerado com sucesso.")
+    else:
+        print(f"Diretório '{OUTPUT_DIR}' já existe. Usando instâncias salvas.")
 
+def load_instance(index):
+    filename = os.path.join(OUTPUT_DIR, f"instancia_{index}.pkl")
+    with open(filename, "rb") as f:
+        return pickle.load(f)
 
-# 2. META-HEURÍSTICA: ALGORITMO GENÉTICO
+# ==============================================================================
+# 2. VERIFICAÇÃO DE RESTRIÇÕES (FÍSICA DA REDE)
+# ==============================================================================
+
+def verify_constraints(G, commodities, paths_indices, all_possible_paths):
+    """
+    Calcula métricas físicas detalhadas: 
+    - Violação de Capacidade
+    - Conservação de Fluxo (Garantida pela representação de caminho, mas verificamos totais)
+    """
+    edge_usage = {e: 0 for e in G.edges()}
+    total_flow_routed = 0
+    total_demand = sum(c['d'] for c in commodities)
+    
+    # Mapear uso das arestas
+    for i, route_idx in enumerate(paths_indices):
+        if route_idx == -1: continue # Rota não encontrada ou inválida
+        
+        path = all_possible_paths[i][route_idx]
+        demand = commodities[i]['d']
+        total_flow_routed += demand
+        
+        for j in range(len(path) - 1):
+            u, v = path[j], path[j+1]
+            edge_usage[(u,v)] += demand
+
+    # Verificar Capacidades
+    violated_edges = 0
+    total_excess = 0
+    for u, v in G.edges():
+        cap = G[u][v]['capacity']
+        usage = edge_usage[(u,v)]
+        if usage > cap:
+            violated_edges += 1
+            total_excess += (usage - cap)
+            
+    metrics = {
+        "demand_met_pct": (total_flow_routed / total_demand) * 100 if total_demand > 0 else 0,
+        "violated_edges_count": violated_edges,
+        "total_capacity_excess": total_excess,
+        "is_feasible": violated_edges == 0
+    }
+    return metrics
+
+# ==============================================================================
+# 3. ALGORITMOS (ADAPTADOS PARA O BENCHMARK)
+# ==============================================================================
+
+# --- HEURÍSTICA SEQUENCIAL (Determinística) ---
+def solve_sequential_mcmf(G, commodities):
+    temp_G = G.copy()
+    total_cost = 0
+    start = time.time()
+    
+    # Armazena os caminhos escolhidos para validação posterior
+    # Como o sequential altera o grafo, vamos simular a escolha de rotas
+    # Nota: Para simplificar a comparação exata de métricas, aqui focamos no Custo e Viabilidade
+    # retornados pelo próprio processo sequencial.
+    
+    feasible_count = 0
+    edge_usage = {e: 0 for e in G.edges()}
+    
+    for cmd in commodities:
+        s, t, d = cmd['s'], cmd['t'], cmd['d']
+        try:
+            temp_G.nodes[s]['demand'] = -d
+            temp_G.nodes[t]['demand'] = d
+            flow_dict = nx.min_cost_flow(temp_G)
+            
+            # Contabiliza custo e atualiza residual
+            path_found = False
+            for u, v_dist in flow_dict.items():
+                for v, flow in v_dist.items():
+                    if flow > 0:
+                        path_found = True
+                        total_cost += flow * temp_G[u][v]['cost']
+                        temp_G[u][v]['capacity'] -= flow
+                        edge_usage[(u,v)] += flow # Rastreio para validação
+            
+            if path_found: feasible_count += 1
+            
+            temp_G.nodes[s]['demand'] = 0
+            temp_G.nodes[t]['demand'] = 0
+            
+        except nx.NetworkXUnfeasible:
+            # Se falhar, penaliza
+            total_cost += PENALTY_FACTOR
+            
+    duration = time.time() - start
+    
+    # Verifica violações (Neste algoritmo greedy, violação geralmente resulta em NetworkXUnfeasible
+    # ou falha em rotear, mas vamos contar "arestas estouradas" como 0 se respeitou o residual,
+    # porém a "Inviabilidade" vem de não conseguir rotear a demanda).
+    
+    is_fully_feasible = (feasible_count == len(commodities))
+    
+    return {
+        "cost": total_cost,
+        "time": duration,
+        "feasible": is_fully_feasible,
+        "method": "Sequential"
+    }
+
+# --- ALGORITMO GENÉTICO ---
 class GeneticAlgorithmMCF:
     def __init__(self, G, commodities):
         self.G = G
         self.commodities = commodities
-        # Pré-processamento: Descobre rotas possíveis para cada mercadoria
-        # O "Gene" será o índice da rota escolhida nesta lista
-        self.possible_routes = [] 
-        for s, t, d in commodities:
-            routes = k_shortest_paths(G, s, t, K_PATHS)
-            self.possible_routes.append(routes)
+        self.possible_routes = [
+            list(islice(nx.shortest_simple_paths(G, c['s'], c['t'], weight='cost'), K_PATHS))
+            for c in commodities
+        ]
 
     def fitness(self, chromosome):
-        """
-        Calcula o custo total. Se estourar capacidade, aplica penalidade.
-        chromosome: lista de inteiros, onde cada int é o índice da rota escolhida para a mercadoria i.
-        """
-        total_cost = 0
-        edge_usage = {} # (u,v) -> uso atual
+        cost = 0
+        usage = {e: 0 for e in self.G.edges()}
         
-        # Inicializa uso das arestas
-        for u, v in self.G.edges():
-            edge_usage[(u,v)] = 0
-            
-        penalty_count = 0
+        for i, idx in enumerate(chromosome):
+            path = self.possible_routes[i][idx]
+            d = self.commodities[i]['d']
+            for j in range(len(path)-1):
+                u, v = path[j], path[j+1]
+                usage[(u,v)] += d
+                cost += self.G[u][v]['cost'] * d
         
-        for i, route_idx in enumerate(chromosome):
-            # Se a rota escolhida for válida (índice existe)
-            if route_idx < len(self.possible_routes[i]):
-                path = self.possible_routes[i][route_idx]
-                demand = self.commodities[i][2]
-                
-                # Soma custo e computa uso das arestas
-                for j in range(len(path) - 1):
-                    u, v = path[j], path[j+1]
-                    edge_cost = self.G[u][v]['cost']
-                    edge_usage[(u,v)] += demand
-                    total_cost += edge_cost * demand
-
-        # Verifica violações de capacidade (Restrição Hard penalizada)
-        for u, v in self.G.edges():
-            capacity = self.G[u][v]['capacity']
-            usage = edge_usage[(u,v)]
-            if usage > capacity:
-                # Penalidade proporcional ao excesso
-                total_cost += (usage - capacity) * PENALTY_FACTOR
-                penalty_count += 1
-                
-        return total_cost, penalty_count
+        penalties = 0
+        for e in self.G.edges():
+            if usage[e] > self.G[e[0]][e[1]]['capacity']:
+                excess = usage[e] - self.G[e[0]][e[1]]['capacity']
+                cost += excess * PENALTY_FACTOR
+                penalties += 1
+        return cost, penalties
 
     def run(self):
-        # População Inicial: Escolha aleatória de rotas
-        population = []
-        for _ in range(POPULATION_SIZE):
-            ind = [random.randint(0, len(routes)-1) if routes else -1 for routes in self.possible_routes]
-            population.append(ind)
+        start = time.time()
+        pop = [[random.randint(0, len(r)-1) for r in self.possible_routes] for _ in range(POPULATION_SIZE)]
+        best_sol = None
+        best_fit = float('inf')
+        
+        for _ in range(GENERATIONS):
+            fits = [self.fitness(ind) for ind in pop]
+            # Elitismo
+            min_fit = min(fits, key=lambda x: x[0])
+            if min_fit[0] < best_fit:
+                best_fit = min_fit[0]
+                best_sol = pop[fits.index(min_fit)]
             
-        best_solution = None
-        best_fitness = float('inf')
-        history = []
-
-        start_time = time.time()
-
-        for gen in range(GENERATIONS):
-            # Avaliação
-            population_fitness = []
-            for ind in population:
-                fit, penalties = self.fitness(ind)
-                population_fitness.append((ind, fit))
-                
-                if fit < best_fitness:
-                    best_fitness = fit
-                    best_solution = ind
-            
-            history.append(best_fitness)
-            
-            # Seleção (Torneio)
-            next_generation = []
-            # Elitismo: Mantém o melhor
-            next_generation.append(best_solution) 
-            
-            while len(next_generation) < POPULATION_SIZE:
-                parent1 = self._tournament(population_fitness)
-                parent2 = self._tournament(population_fitness)
-                
-                # Crossover (Ponto único)
+            # Nova população
+            new_pop = [best_sol]
+            while len(new_pop) < POPULATION_SIZE:
+                # Torneio simples
+                p1 = pop[random.randint(0, len(pop)-1)]
+                p2 = pop[random.randint(0, len(pop)-1)]
+                # Crossover
                 cut = random.randint(1, len(self.commodities)-1)
-                child = parent1[:cut] + parent2[cut:]
-                
+                child = p1[:cut] + p2[cut:]
                 # Mutação
                 if random.random() < MUTATION_RATE:
-                    idx_to_mutate = random.randint(0, len(child)-1)
-                    if self.possible_routes[idx_to_mutate]:
-                        child[idx_to_mutate] = random.randint(0, len(self.possible_routes[idx_to_mutate])-1)
-                
-                next_generation.append(child)
+                    idx = random.randint(0, len(child)-1)
+                    child[idx] = random.randint(0, len(self.possible_routes[idx])-1)
+                new_pop.append(child)
+            pop = new_pop
             
-            population = next_generation
+        duration = time.time() - start
+        
+        # Coleta métricas detalhadas da melhor solução
+        constraints = verify_constraints(self.G, self.commodities, best_sol, self.possible_routes)
+        
+        return {
+            "cost": best_fit,
+            "time": duration,
+            "feasible": constraints['is_feasible'],
+            "violated_edges": constraints['violated_edges_count'],
+            "excess_capacity": constraints['total_capacity_excess'],
+            "method": "Genetic Algo"
+        }
+
+# ==============================================================================
+# 4. LOOP PRINCIPAL DE BENCHMARK
+# ==============================================================================
+
+def run_benchmark():
+    generate_and_save_dataset()
+    
+    results = []
+    
+    print(f"\n{'='*60}")
+    print(f"INICIANDO BENCHMARK ({NUM_INSTANCES} Instâncias x {NUM_RUNS_GA} Runs GA)")
+    print(f"{'='*60}\n")
+    
+    for i in range(NUM_INSTANCES):
+        print(f"--- Processando Instância {i+1}/{NUM_INSTANCES} ---")
+        G, comms = load_instance(i)
+        
+        # 1. Executar Sequencial (Determinístico -> 1 vez basta)
+        seq_res = solve_sequential_mcmf(G, comms)
+        # Replicamos o resultado para facilitar a plotagem lado a lado, 
+        # ou guardamos como baseline.
+        results.append({
+            "Instance": i,
+            "Algorithm": "Sequencial",
+            "Run_ID": 0,
+            "Cost": seq_res["cost"],
+            "Time": seq_res["time"],
+            "Feasible": seq_res["feasible"],
+            "Violations": "N/A (Failed Route)" if not seq_res["feasible"] else 0
+        })
+        
+        # 2. Executar GA (Estocástico -> Várias vezes)
+        ga_costs = []
+        ga_feasibility = 0
+        
+        for run_id in range(NUM_RUNS_GA):
+            ga = GeneticAlgorithmMCF(G, comms)
+            ga_res = ga.run()
             
-        elapsed_time = time.time() - start_time
-        return best_solution, best_fitness, elapsed_time, history
+            results.append({
+                "Instance": i,
+                "Algorithm": "Genetic Algorithm",
+                "Run_ID": run_id,
+                "Cost": ga_res["cost"],
+                "Time": ga_res["time"],
+                "Feasible": ga_res["feasible"],
+                "Violations": ga_res["violated_edges"]
+            })
+            ga_costs.append(ga_res["cost"])
+            if ga_res["feasible"]: ga_feasibility += 1
+            
+        print(f"   > Sequencial Custo: {seq_res['cost']:.0f} | Viável: {seq_res['feasible']}")
+        print(f"   > GA Média Custo: {np.mean(ga_costs):.0f} | Viabilidade: {ga_feasibility}/{NUM_RUNS_GA} runs")
 
-    def _tournament(self, pop_fit, k=3):
-        candidates = random.sample(pop_fit, k)
-        # Retorna o indivíduo com menor custo (fitness)
-        return min(candidates, key=lambda x: x[1])[0]
+    return pd.DataFrame(results)
 
+# ==============================================================================
+# 5. ANÁLISE E VISUALIZAÇÃO
+# ==============================================================================
 
-# 3. EXECUÇÃO PRINCIPAL
+def plot_results(df):
+    # Tabela Resumo (Médias por Instância e Algoritmo)
+    summary = df.groupby(['Instance', 'Algorithm']).agg({
+        'Cost': 'mean',
+        'Time': 'mean',
+        'Feasible': 'mean', # % de sucesso
+        'Violations': lambda x: np.mean([v for v in x if isinstance(v, (int, float))])
+    }).reset_index()
+    
+    print("\n" + "="*40)
+    print("TABELA RESUMO DAS MÉDIAS")
+    print("="*40)
+    print(summary.to_string())
+
+    # --- PLOT 1: Comparação de Custos (Boxplot) ---
+    # Filtramos custos absurdamente altos (penalidades) para o gráfico ficar legível
+    # Se quiser ver as falhas, remova o filtro ou use log scale
+    
+    instances = df['Instance'].unique()
+    
+    fig, axes = plt.subplots(2, 1, figsize=(12, 10))
+    
+    # Boxplot de Custos
+    # Para plotar, vamos criar arrays para o boxplot do GA e pontos para o Sequencial
+    ga_data = [df[(df['Instance']==i) & (df['Algorithm']=='Genetic Algorithm')]['Cost'].values for i in instances]
+    seq_data = [df[(df['Instance']==i) & (df['Algorithm']=='Sequencial')]['Cost'].values[0] for i in instances]
+    
+    axes[0].boxplot(ga_data, positions=instances, widths=0.6, patch_artist=True, boxprops=dict(facecolor="lightblue"))
+    axes[0].scatter(instances, seq_data, color='red', zorder=5, label='Sequencial (Único)', s=100, marker='X')
+    
+    axes[0].set_title('Distribuição de Custos: GA (20 execuções) vs Sequencial')
+    axes[0].set_ylabel('Custo Total (Escala Log)')
+    axes[0].set_yscale('log') # Essencial devido às penalidades
+    axes[0].set_xticks(instances)
+    axes[0].set_xticklabels([f"Inst {i}" for i in instances])
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
+
+    # --- PLOT 2: Taxa de Viabilidade ---
+    # Bar chart mostrando % de vezes que encontrou solução viável
+    
+    width = 0.35
+    x = np.arange(len(instances))
+    
+    # Viabilidade Sequencial (0 ou 1)
+    seq_feas = [df[(df['Instance']==i) & (df['Algorithm']=='Sequencial')]['Feasible'].mean() * 100 for i in instances]
+    # Viabilidade GA (0 a 100%)
+    ga_feas = [df[(df['Instance']==i) & (df['Algorithm']=='Genetic Algorithm')]['Feasible'].mean() * 100 for i in instances]
+    
+    axes[1].bar(x - width/2, seq_feas, width, label='Sequencial', color='salmon')
+    axes[1].bar(x + width/2, ga_feas, width, label='Genetic Algo', color='skyblue')
+    
+    axes[1].set_title('Taxa de Viabilidade (% de Soluções Válidas)')
+    axes[1].set_ylabel('% Viável')
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels([f"Inst {i}" for i in instances])
+    axes[1].legend()
+    axes[1].grid(True, axis='y', alpha=0.3)
+    
+    plt.tight_layout()
+    plt.show()
+
 if __name__ == "__main__":
-    print("--- Iniciando Otimização de Fluxo Multi-Commodity ---")
-    
-    # 1. Configurar Instância (Use fixas para benchmark, aqui é aleatória para teste)
-    G, commodities = create_random_instance(num_nodes=20, num_edges=60, num_commodities=5)
-    
-    print(f"Grafo: {G.number_of_nodes()} nós, {G.number_of_edges()} arestas.")
-    print(f"Demandas: {len(commodities)} mercadorias para rotear.")
-    
-    # 2. Executar Meta-heurística
-    ga = GeneticAlgorithmMCF(G, commodities)
-    best_sol, cost, duration, fit_history = ga.run()
-    
-    # 3. Exibir Resultados
-    print("\n--- Resultados Finais ---")
-    print(f"Melhor Custo Encontrado: {cost}")
-    print(f"Tempo de Execução: {duration:.4f} segundos")
-    
-    # Verifica se houve penalidade (se a solução é viável)
-    final_cost, penalties = ga.fitness(best_sol)
-    if penalties > 0:
-        print(f"ALERTA: Solução inviável (Violação de {penalties} capacidades)")
-    else:
-        print("Solução Viável: Todas as capacidades respeitadas.")
-
-    print("\nDetalhes das Rotas Escolhidas:")
-    for i, route_idx in enumerate(best_sol):
-        s, t, d = commodities[i]
-        path = ga.possible_routes[i][route_idx]
-        print(f"Commodity {i} (De {s} para {t}, Demanda {d}): Rota {path}")
-
-    # (Opcional) Plotar convergência
-    # plt.plot(fit_history)
-    # plt.title("Convergência do Algoritmo Genético")
-    # plt.xlabel("Geração")
-    # plt.ylabel("Custo (Fitness)")
-    # plt.show()
+    df_results = run_benchmark()
+    plot_results(df_results)
