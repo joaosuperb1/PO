@@ -1,0 +1,34 @@
+============================================================
+INICIANDO BENCHMARK (10 Instâncias x 20 Runs GA)
+============================================================
+
+--- Processando Instância 1/10 ---
+   > Sequencial Custo: 152624 | Viável: False
+   > GA Média Custo: 252690 | Viabilidade: 0/20 runs
+--- Processando Instância 2/10 ---
+   > Sequencial Custo: 2381 | Viável: True
+   > GA Média Custo: 2049 | Viabilidade: 20/20 runs
+--- Processando Instância 3/10 ---
+   > Sequencial Custo: 2799 | Viável: True
+   > GA Média Custo: 1957 | Viabilidade: 20/20 runs
+--- Processando Instância 4/10 ---
+   > Sequencial Custo: 2299 | Viável: True
+   > GA Média Custo: 1806 | Viabilidade: 20/20 runs
+--- Processando Instância 5/10 ---
+   > Sequencial Custo: 2434 | Viável: True
+   > GA Média Custo: 1832 | Viabilidade: 20/20 runs
+--- Processando Instância 6/10 ---
+   > Sequencial Custo: 2623 | Viável: True
+   > GA Média Custo: 1969 | Viabilidade: 20/20 runs
+--- Processando Instância 7/10 ---
+   > Sequencial Custo: 2992 | Viável: True
+   > GA Média Custo: 2336 | Viabilidade: 20/20 runs
+--- Processando Instância 8/10 ---
+   > Sequencial Custo: 251551 | Viável: False
+   > GA Média Custo: 2384 | Viabilidade: 20/20 runs
+--- Processando Instância 9/10 ---
+   > Sequencial Custo: 2237 | Viável: True
+   > GA Média Custo: 1535 | Viabilidade: 20/20 runs
+--- Processando Instância 10/10 ---
+   > Sequencial Custo: 2880 | Viável: True
+   > GA Média Custo: 1963 | Viabilidade: 20/20 runs

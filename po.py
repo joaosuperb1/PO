@@ -7,6 +7,7 @@ import os
 import numpy as np
 from itertools import islice
 import pandas as pd
+import seaborn as sns
 
 # --- CONFIGURAÇÕES DO EXPERIMENTO ---
 NUM_INSTANCES = 10        # Quantos cenários diferentes
@@ -292,71 +293,140 @@ def run_benchmark():
     return pd.DataFrame(results)
 
 # ==============================================================================
-# 5. ANÁLISE E VISUALIZAÇÃO
+# 5. ANÁLISE E VISUALIZAÇÃO (CORRIGIDA E MELHORADA)
 # ==============================================================================
 
 def plot_results(df):
-    # Tabela Resumo (Médias por Instância e Algoritmo)
-    summary = df.groupby(['Instance', 'Algorithm']).agg({
-        'Cost': 'mean',
-        'Time': 'mean',
-        'Feasible': 'mean', # % de sucesso
-        'Violations': lambda x: np.mean([v for v in x if isinstance(v, (int, float))])
-    }).reset_index()
+    """
+    Gera um dashboard analítico comparando GA vs Sequencial.
+    - Removeu o plot de trade-off.
+    - Garante consistência de cores entre todos os gráficos.
+    - Novo layout 5-painéis.
+    """
+    # Configuração estética do Seaborn
+    sns.set_theme(style="whitegrid", context="paper", font_scale=1.1)
     
-    print("\n" + "="*40)
-    print("TABELA RESUMO DAS MÉDIAS")
-    print("="*40)
-    print(summary.to_string())
+    # --- DEFINIÇÃO DE CORES CONSISTENTES ---
+    # Usamos a paleta padrão 'deep' do seaborn e fixamos as cores para cada algoritmo.
+    # Assim, não importa a ordem dos dados, a cor será sempre a mesma.
+    default_palette = sns.color_palette("deep")
+    algorithm_colors = {
+        "Sequencial": default_palette[0],       # Geralmente Azul
+        "Genetic Algorithm": default_palette[1] # Geralmente Laranja
+    }
 
-    # --- PLOT 1: Comparação de Custos (Boxplot) ---
-    # Filtramos custos absurdamente altos (penalidades) para o gráfico ficar legível
-    # Se quiser ver as falhas, remova o filtro ou use log scale
+    # Cria uma figura grande.
+    # Layout novo: 3 linhas. As duas primeiras têm 2 colunas. A última linha ocupa tudo.
+    fig = plt.figure(figsize=(16, 14))
+    gs = fig.add_gridspec(3, 2)
     
-    instances = df['Instance'].unique()
+    # Identificar instâncias únicas para ordenação dos eixos X
+    instances = sorted(df['Instance'].unique())
     
-    fig, axes = plt.subplots(2, 1, figsize=(12, 10))
-    
-    # Boxplot de Custos
-    # Para plotar, vamos criar arrays para o boxplot do GA e pontos para o Sequencial
-    ga_data = [df[(df['Instance']==i) & (df['Algorithm']=='Genetic Algorithm')]['Cost'].values for i in instances]
-    seq_data = [df[(df['Instance']==i) & (df['Algorithm']=='Sequencial')]['Cost'].values[0] for i in instances]
-    
-    axes[0].boxplot(ga_data, positions=instances, widths=0.6, patch_artist=True, boxprops=dict(facecolor="lightblue"))
-    axes[0].scatter(instances, seq_data, color='red', zorder=5, label='Sequencial (Único)', s=100, marker='X')
-    
-    axes[0].set_title('Distribuição de Custos: GA (20 execuções) vs Sequencial')
-    axes[0].set_ylabel('Custo Total (Escala Log)')
-    axes[0].set_yscale('log') # Essencial devido às penalidades
-    axes[0].set_xticks(instances)
-    axes[0].set_xticklabels([f"Inst {i}" for i in instances])
-    axes[0].legend()
-    axes[0].grid(True, alpha=0.3)
+    # --- LÓGICA DE ZOOM INTELIGENTE (Mantida) ---
+    cutoff_threshold = df['Cost'].median() * 2.5  
+    df_zoom = df[df['Cost'] < cutoff_threshold].copy()
 
-    # --- PLOT 2: Taxa de Viabilidade ---
-    # Bar chart mostrando % de vezes que encontrou solução viável
+    # =================================================================
+    # LINHA 1: ANÁLISE DE CUSTO (MACRO vs MICRO)
+    # =================================================================
     
-    width = 0.35
-    x = np.arange(len(instances))
+    # [0,0] Visão Geral (Inclui Penalidades) - Escala Log
+    ax0 = fig.add_subplot(gs[0, 0])
+    sns.boxplot(x='Instance', y='Cost', hue='Algorithm', data=df, ax=ax0, 
+                palette=algorithm_colors, showfliers=True, linewidth=1)
+    ax0.set_title('1. Visão Macro: Custos Totais (Com Penalidades)', fontweight='bold')
+    ax0.set_yscale('log')
+    ax0.set_ylabel('Custo Total (R$) - Log Scale')
+    ax0.legend(loc='upper right', frameon=True)
+
+    # [0,1] Visão Micro (Zoom nos Vencedores)
+    ax1 = fig.add_subplot(gs[0, 1])
+    if not df_zoom.empty:
+        sns.boxplot(x='Instance', y='Cost', hue='Algorithm', data=df_zoom, ax=ax1, 
+                    palette=algorithm_colors, showfliers=False, linewidth=1)
+        
+        # Adiciona os pontos do Sequencial para destacar (usando a mesma cor definida)
+        seq_data = df_zoom[df_zoom['Algorithm'] == 'Sequencial']
+        if not seq_data.empty:
+            sns.stripplot(x='Instance', y='Cost', data=seq_data, ax=ax1, 
+                          color=algorithm_colors["Sequencial"], size=6, marker='D', jitter=False, zorder=5)
+        
+        ax1.set_title('2. Visão Micro: Detalhe (Sem Penalidades Extremas)', fontweight='bold', color='#333333')
+        ax1.set_ylabel('Custo Real (R$)')
+        ax1.legend_.remove() # Remove legenda duplicada para limpar
+    else:
+        ax1.text(0.5, 0.5, "Todas as soluções foram penalizadas (Custo muito alto).", ha='center')
+        ax1.set_title('2. Visão Micro (Sem dados)', fontweight='bold')
+
+    # =================================================================
+    # LINHA 2: PERFORMANCE E ROBUSTEZ
+    # =================================================================
+
+    # [1,0] Tempo de Execução
+    ax2 = fig.add_subplot(gs[1, 0])
+    sns.barplot(x='Instance', y='Time', hue='Algorithm', data=df, ax=ax2, 
+                palette=algorithm_colors, errorbar=('ci', 95), capsize=.1)
+    ax2.set_title('3. Custo Computacional (Tempo de Execução)', fontweight='bold')
+    ax2.set_ylabel('Tempo (s) - Log Scale')
+    ax2.set_yscale('log') # Escala log essencial aqui
+    ax2.legend_.remove()
+
+    # [1,1] Taxa de Viabilidade
+    ax3 = fig.add_subplot(gs[1, 1])
+    # Agrupa para calcular a média de sucesso (0.0 a 1.0)
+    feasibility_data = df.groupby(['Instance', 'Algorithm'])['Feasible'].mean().reset_index()
+    sns.barplot(x='Instance', y='Feasible', hue='Algorithm', data=feasibility_data, ax=ax3, 
+                palette=algorithm_colors, alpha=0.9)
+    ax3.set_title('4. Robustez (% de Soluções Válidas)', fontweight='bold')
+    ax3.set_ylabel('Taxa de Sucesso (0 a 1)')
+    ax3.set_ylim(0, 1.05)
+    # Adiciona uma linha de 100% para referência
+    ax3.axhline(1.0, color='grey', linestyle='--', linewidth=1)
+    ax3.legend_.remove()
+
+    # =================================================================
+    # LINHA 3: DIAGNÓSTICO (Ocupa toda a largura)
+    # =================================================================
+
+    # [2, :] Média de Violações (Diagnóstico de Falha)
+    ax4 = fig.add_subplot(gs[2, :])
     
-    # Viabilidade Sequencial (0 ou 1)
-    seq_feas = [df[(df['Instance']==i) & (df['Algorithm']=='Sequencial')]['Feasible'].mean() * 100 for i in instances]
-    # Viabilidade GA (0 a 100%)
-    ga_feas = [df[(df['Instance']==i) & (df['Algorithm']=='Genetic Algorithm')]['Feasible'].mean() * 100 for i in instances]
+    # Preenche NaN com 0 para evitar erros no plot (assumindo que NaN significa 0 violações ou método diferente)
+    df_vio = df.copy()
+    df_vio['Violations'] = pd.to_numeric(df_vio['Violations'], errors='coerce').fillna(0)
     
-    axes[1].bar(x - width/2, seq_feas, width, label='Sequencial', color='salmon')
-    axes[1].bar(x + width/2, ga_feas, width, label='Genetic Algo', color='skyblue')
+    sns.barplot(x='Instance', y='Violations', hue='Algorithm', data=df_vio, ax=ax4, 
+                palette=algorithm_colors, errorbar=('ci', 68)) # CI 68% é o desvio padrão padrão
     
-    axes[1].set_title('Taxa de Viabilidade (% de Soluções Válidas)')
-    axes[1].set_ylabel('% Viável')
-    axes[1].set_xticks(x)
-    axes[1].set_xticklabels([f"Inst {i}" for i in instances])
-    axes[1].legend()
-    axes[1].grid(True, axis='y', alpha=0.3)
-    
+    ax4.set_title('5. Diagnóstico: Média de Restrições Violadas (Arestas com Capacidade Estourada)', fontweight='bold')
+    ax4.set_ylabel('Qtd. Média de Violações')
+    # Adiciona grids horizontais menores para facilitar a leitura de valores baixos
+    ax4.yaxis.grid(True, which='minor', linestyle='--', linewidth=0.5)
+    ax4.minorticks_on()
+    ax4.xaxis.grid(False) # Desliga grid vertical para limpar
+    ax4.legend_.remove()
+
+    # Ajustes finais de espaçamento
     plt.tight_layout()
+    # Adiciona um título global (opcional)
+    fig.suptitle("Benchmark de Roteamento: Sequencial vs. Algoritmo Genético", y=1.02, fontsize=16, fontweight='bold')
     plt.show()
 
+    # Imprime resumo textual também
+    print("\n" + "="*50)
+    print("TABELA RESUMO (MÉDIAS GERAIS)")
+    print("="*50)
+    summary = df.groupby(['Algorithm']).agg({
+        'Cost': 'mean', 
+        'Time': 'mean', 
+        'Feasible': lambda x: f"{x.mean()*100:.1f}%",
+        'Violations': lambda x: pd.to_numeric(x, errors='coerce').fillna(0).mean()
+    }).rename(columns={'Feasible': 'Viabilidade', 'Violations': 'Média Violações'})
+    print(summary)
+    print("="*50)
+
+    
 if __name__ == "__main__":
     df_results = run_benchmark()
     plot_results(df_results)
